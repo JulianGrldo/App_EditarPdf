@@ -7,8 +7,59 @@ de edición de archivos PDF como rotación, fusión, extracción, etc.
 import os
 import fitz  # PyMuPDF
 from PyPDF2 import PdfReader, PdfWriter
-from typing import List, Optional, Tuple
+from PIL import Image, ImageTk
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase import pdfutils
+from reportlab.lib.colors import black
+import io
+import json
+from typing import List, Optional, Tuple, Dict
 from pathlib import Path
+
+
+class PDFElement:
+    """Representa un elemento editable en el PDF."""
+    
+    def __init__(self, element_type: str, content: str, position: Tuple[float, float], 
+                 size: Tuple[float, float] = (100, 20), font_size: int = 12, color: str = "black"):
+        self.id = id(self)  # ID único
+        self.type = element_type  # 'text', 'image'
+        self.content = content
+        self.position = position  # (x, y)
+        self.size = size  # (width, height)
+        self.font_size = font_size
+        self.color = color
+        self.selected = False
+        self.page_number = 0
+    
+    def to_dict(self) -> Dict:
+        """Convierte el elemento a diccionario para serialización."""
+        return {
+            'id': self.id,
+            'type': self.type,
+            'content': self.content,
+            'position': self.position,
+            'size': self.size,
+            'font_size': self.font_size,
+            'color': self.color,
+            'page_number': self.page_number
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict):
+        """Crea un elemento desde un diccionario."""
+        element = cls(
+            data['type'],
+            data['content'],
+            tuple(data['position']),
+            tuple(data['size']),
+            data['font_size'],
+            data['color']
+        )
+        element.id = data['id']
+        element.page_number = data['page_number']
+        return element
 
 
 class PDFEditor:
@@ -19,6 +70,9 @@ class PDFEditor:
         self.current_pdf = None
         self.current_path = None
         self.pages_info = []
+        self.elements = {}  # {page_number: [PDFElement, ...]}
+        self.selected_element = None
+        self.edit_mode = False
     
     def load_pdf(self, file_path: str) -> bool:
         """Carga un archivo PDF para edición.
@@ -153,6 +207,89 @@ class PDFEditor:
         except Exception as e:
             print(f"Error al fusionar PDFs: {e}")
             return False
+    
+    def add_text_element(self, page_number: int, text: str, position: Tuple[float, float], 
+                        font_size: int = 12, color: str = "black") -> PDFElement:
+        """Añade un elemento de texto editable a una página específica."""
+        element = PDFElement('text', text, position, (len(text) * font_size * 0.6, font_size), font_size, color)
+        element.page_number = page_number
+        
+        if page_number not in self.elements:
+            self.elements[page_number] = []
+        
+        self.elements[page_number].append(element)
+        return element
+    
+    def add_image_element(self, page_number: int, image_path: str, position: Tuple[float, float], 
+                         size: Tuple[float, float] = (100, 100)) -> PDFElement:
+        """Añade un elemento de imagen editable a una página específica."""
+        element = PDFElement('image', image_path, position, size)
+        element.page_number = page_number
+        
+        if page_number not in self.elements:
+            self.elements[page_number] = []
+        
+        self.elements[page_number].append(element)
+        return element
+    
+    def select_element_at_position(self, page_number: int, position: Tuple[float, float]) -> Optional[PDFElement]:
+        """Selecciona un elemento en la posición especificada."""
+        if page_number not in self.elements:
+            return None
+        
+        # Deseleccionar elemento actual
+        if self.selected_element:
+            self.selected_element.selected = False
+        
+        # Buscar elemento en la posición (en orden inverso para seleccionar el más reciente)
+        for element in reversed(self.elements[page_number]):
+            x, y = element.position
+            w, h = element.size
+            
+            if (x <= position[0] <= x + w and y <= position[1] <= y + h):
+                element.selected = True
+                self.selected_element = element
+                return element
+        
+        self.selected_element = None
+        return None
+    
+    def move_selected_element(self, new_position: Tuple[float, float]) -> bool:
+        """Mueve el elemento seleccionado a una nueva posición."""
+        if self.selected_element:
+            self.selected_element.position = new_position
+            return True
+        return False
+    
+    def edit_selected_element(self, new_content: str) -> bool:
+        """Edita el contenido del elemento seleccionado."""
+        if self.selected_element and self.selected_element.type == 'text':
+            self.selected_element.content = new_content
+            # Ajustar tamaño basado en el nuevo contenido
+            font_size = self.selected_element.font_size
+            self.selected_element.size = (len(new_content) * font_size * 0.6, font_size)
+            return True
+        return False
+    
+    def delete_selected_element(self) -> bool:
+        """Elimina el elemento seleccionado."""
+        if self.selected_element:
+            page_number = self.selected_element.page_number
+            if page_number in self.elements:
+                self.elements[page_number].remove(self.selected_element)
+                self.selected_element = None
+                return True
+        return False
+    
+    def get_page_elements(self, page_number: int) -> List[PDFElement]:
+        """Obtiene todos los elementos de una página."""
+        return self.elements.get(page_number, [])
+    
+    def clear_selection(self):
+        """Deselecciona el elemento actual."""
+        if self.selected_element:
+            self.selected_element.selected = False
+            self.selected_element = None
     
     def add_text(self, page_num: int, text: str, position: Tuple[float, float], 
                  font_size: int = 12, color: Tuple[float, float, float] = (0, 0, 0)) -> bool:

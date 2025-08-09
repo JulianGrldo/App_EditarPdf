@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from PIL import Image, ImageTk
 import io
+import os
 from typing import Optional
 
 from ..utils.colors import ColorPalette
@@ -24,6 +25,11 @@ class MainWindow:
         self.pdf_editor = PDFEditor()
         self.current_page = 0
         self.zoom_level = 1.0
+        self.pdf_image = None
+        self.edit_mode = False
+        self.dragging = False
+        self.drag_start = None
+        self.canvas_elements = {}  # {element_id: canvas_item_id}
         
         self._setup_window()
         self._create_styles()
@@ -233,20 +239,38 @@ class MainWindow:
         # Sección de texto
         text_frame = ttk.LabelFrame(
             self.sidebar_frame,
-            text="Texto",
+            text="Edición",
             padding=10
         )
         text_frame.pack(fill='x', padx=15, pady=5)
         
+        self.btn_edit_mode = ttk.Button(
+            text_frame,
+            text="✏️ Modo Edición",
+            style='Secondary.TButton',
+            command=self.toggle_edit_mode,
+            state='disabled'
+        )
+        
         self.btn_add_text = ttk.Button(
             text_frame,
-            text="✏️ Añadir Texto",
+            text="📝 Añadir Texto",
             style='Secondary.TButton',
             command=self.add_text,
             state='disabled'
         )
         
+        self.btn_add_image = ttk.Button(
+            text_frame,
+            text="🖼️ Añadir Imagen",
+            style='Secondary.TButton',
+            command=self.add_image,
+            state='disabled'
+        )
+        
+        self.btn_edit_mode.pack(fill='x', pady=2)
         self.btn_add_text.pack(fill='x', pady=2)
+        self.btn_add_image.pack(fill='x', pady=2)
         
         # Sección de fusión
         merge_frame = ttk.LabelFrame(
@@ -301,6 +325,14 @@ class MainWindow:
         h_scrollbar = ttk.Scrollbar(self.canvas_frame, orient='horizontal', command=self.canvas.xview)
         
         self.canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Bind eventos del canvas
+        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.canvas.bind("<Double-Button-1>", self.on_canvas_double_click)
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        self.canvas.bind("<Key>", self.on_canvas_key)
+        self.canvas.focus_set()
         
         # Empaquetar canvas y scrollbars
         self.canvas.grid(row=0, column=0, sticky='nsew')
@@ -492,27 +524,119 @@ class MainWindow:
         if not self.pdf_editor.current_pdf:
             return
         
-        # Obtener imagen de la página actual
-        image_data = self.pdf_editor.get_page_image(self.current_page, self.zoom_level)
-        
-        if image_data:
-            # Convertir a imagen de PIL
-            image = Image.open(io.BytesIO(image_data))
-            self.photo = ImageTk.PhotoImage(image)
+        try:
+            # Obtener imagen de la página actual
+            image_data = self.pdf_editor.get_page_image(self.current_page, self.zoom_level)
             
-            # Limpiar canvas y mostrar imagen
-            self.canvas.delete('all')
-            self.canvas.create_image(10, 10, anchor='nw', image=self.photo)
+            if image_data:
+                # Convertir a imagen de PIL
+                image = Image.open(io.BytesIO(image_data))
+                self.photo = ImageTk.PhotoImage(image)
+                
+                # Limpiar canvas y mostrar imagen
+                self.canvas.delete('all')
+                self.canvas_elements.clear()
+                
+                self.canvas.create_image(10, 10, anchor='nw', image=self.photo)
+                
+                # Mostrar elementos editables si está en modo edición
+                if self.edit_mode:
+                    self._draw_editable_elements()
+                
+                # Actualizar scroll region
+                self.canvas.configure(scrollregion=self.canvas.bbox('all'))
+                
+                # Actualizar etiqueta de página
+                total_pages = self.pdf_editor.get_page_count()
+                self.page_label.config(text=f"Página: {self.current_page + 1} / {total_pages}")
+                
+                # Actualizar zoom
+                self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+        except Exception as e:
+            print(f"Error al actualizar display: {e}")
+    
+    def _draw_editable_elements(self):
+        """Dibuja los elementos editables en el canvas."""
+        try:
+            elements = self.pdf_editor.get_page_elements(self.current_page)
             
-            # Actualizar scroll region
-            self.canvas.configure(scrollregion=self.canvas.bbox('all'))
-            
-            # Actualizar etiqueta de página
-            total_pages = self.pdf_editor.get_page_count()
-            self.page_label.config(text=f"Página: {self.current_page + 1} / {total_pages}")
-            
-            # Actualizar zoom
-            self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+            for element in elements:
+                x, y = element.position
+                w, h = element.size
+                
+                if element.type == 'text':
+                    # Dibujar texto
+                    text_id = self.canvas.create_text(
+                        x + 10, y + 10,  # Offset por la imagen
+                        text=element.content,
+                        anchor="nw",
+                        font=("Arial", element.font_size),
+                        fill=element.color,
+                        tags="editable"
+                    )
+                    
+                    # Dibujar borde si está seleccionado
+                    if element.selected:
+                        bbox = self.canvas.bbox(text_id)
+                        if bbox:
+                            border_id = self.canvas.create_rectangle(
+                                bbox[0]-2, bbox[1]-2, bbox[2]+2, bbox[3]+2,
+                                outline=ColorPalette.ACCENT,
+                                width=2,
+                                dash=(5, 5),
+                                tags="selection"
+                            )
+                            self.canvas_elements[element.id] = (text_id, border_id)
+                        else:
+                            self.canvas_elements[element.id] = (text_id, None)
+                    else:
+                        self.canvas_elements[element.id] = (text_id, None)
+                
+                elif element.type == 'image':
+                    try:
+                        # Cargar y redimensionar imagen
+                        img = Image.open(element.content)
+                        img = img.resize((int(w), int(h)), Image.Resampling.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        
+                        # Dibujar imagen
+                        image_id = self.canvas.create_image(
+                            x + 10, y + 10,  # Offset por la imagen
+                            anchor="nw",
+                            image=photo,
+                            tags="editable"
+                        )
+                        
+                        # Mantener referencia a la imagen
+                        if not hasattr(self.canvas, 'image_refs'):
+                            self.canvas.image_refs = []
+                        self.canvas.image_refs.append(photo)
+                        
+                        # Dibujar borde si está seleccionado
+                        if element.selected:
+                            border_id = self.canvas.create_rectangle(
+                                x + 8, y + 8, x + w + 12, y + h + 12,
+                                outline=ColorPalette.ACCENT,
+                                width=2,
+                                dash=(5, 5),
+                                tags="selection"
+                            )
+                            self.canvas_elements[element.id] = (image_id, border_id)
+                        else:
+                            self.canvas_elements[element.id] = (image_id, None)
+                            
+                    except Exception as e:
+                        print(f"Error al cargar imagen {element.content}: {e}")
+                        # Dibujar rectángulo como placeholder
+                        rect_id = self.canvas.create_rectangle(
+                            x + 10, y + 10, x + w + 10, y + h + 10,
+                            outline="red",
+                            fill="lightgray",
+                            tags="editable"
+                        )
+                        self.canvas_elements[element.id] = (rect_id, None)
+        except Exception as e:
+            print(f"Error al dibujar elementos editables: {e}")
     
     def _update_info_panel(self):
         """Actualiza el panel de información."""
@@ -628,11 +752,28 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
         
         if text:
             # Añadir en el centro de la página
-            if self.pdf_editor.add_text(self.current_page, text, (100, 100)):
+            center_x = 200
+            center_y = 200
+            
+            try:
+                element = self.pdf_editor.add_text_element(
+                    self.current_page, 
+                    text, 
+                    (center_x, center_y),
+                    font_size=12,
+                    color="black"
+                )
+                
                 self._update_display()
                 self.update_status(f"Texto añadido: '{text[:20]}...'")
                 messagebox.showinfo("Éxito", "Texto añadido correctamente")
-            else:
+                
+                # Activar modo edición si no está activo
+                if not self.edit_mode:
+                    self.toggle_edit_mode()
+                    
+            except Exception as e:
+                print(f"Error al añadir texto: {e}")
                 messagebox.showerror("Error", "No se pudo añadir el texto")
     
     def merge_pdfs(self):
@@ -660,7 +801,169 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
         """Muestra el diálogo Acerca de."""
         show_about(self.root)
     
+    def toggle_edit_mode(self):
+        """Alterna el modo de edición."""
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        self.edit_mode = not self.edit_mode
+        
+        if self.edit_mode:
+            self.btn_edit_mode.config(text="🔒 Bloquear")
+            self.update_status("Modo edición activado - Haga clic para seleccionar elementos")
+            self.canvas.config(cursor="crosshair")
+            self.btn_add_text.config(state='normal')
+            self.btn_add_image.config(state='normal')
+        else:
+            self.btn_edit_mode.config(text="✏️ Modo Edición")
+            self.update_status("Modo edición desactivado")
+            self.canvas.config(cursor="")
+        
+        self._update_display()
+    
+    def add_image(self):
+        """Añade una imagen al PDF."""
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        # Seleccionar archivo de imagen
+        image_file = filedialog.askopenfilename(
+            title="Seleccionar imagen",
+            filetypes=[
+                ("Imágenes", "*.png *.jpg *.jpeg *.gif *.bmp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        
+        if image_file:
+            try:
+                # Añadir imagen en el centro de la página
+                center_x = 200
+                center_y = 200
+                
+                element = self.pdf_editor.add_image_element(
+                    self.current_page, 
+                    image_file, 
+                    (center_x, center_y),
+                    (150, 150)  # Tamaño por defecto
+                )
+                
+                self._update_display()
+                self.update_status(f"Imagen añadida: {os.path.basename(image_file)}")
+                messagebox.showinfo("Éxito", "Imagen añadida correctamente")
+                
+                # Activar modo edición si no está activo
+                if not self.edit_mode:
+                    self.toggle_edit_mode()
+                    
+            except Exception as e:
+                print(f"Error al añadir imagen: {e}")
+                messagebox.showerror("Error", "No se pudo añadir la imagen")
+    
     def on_canvas_click(self, event):
         """Maneja clics en el canvas."""
-        # Aquí se puede implementar funcionalidad de selección de texto
-        pass
+        if not self.edit_mode or not self.pdf_editor.current_pdf:
+            return
+        
+        # Convertir coordenadas del canvas a coordenadas del PDF
+        canvas_x = self.canvas.canvasx(event.x) - 10  # Ajustar por offset de imagen
+        canvas_y = self.canvas.canvasy(event.y) - 10
+        
+        # Intentar seleccionar elemento en la posición
+        selected = self.pdf_editor.select_element_at_position(self.current_page, (canvas_x, canvas_y))
+        
+        if selected:
+            self.update_status(f"Elemento seleccionado: {selected.type} - {selected.content[:30] if selected.type == 'text' else 'imagen'}")
+            self.drag_start = (canvas_x, canvas_y)
+        else:
+            self.pdf_editor.clear_selection()
+            self.update_status(f"Posición: ({int(canvas_x)}, {int(canvas_y)}) - Ningún elemento seleccionado")
+            self.drag_start = None
+        
+        self._update_display()
+    
+    def on_canvas_drag(self, event):
+        """Maneja el arrastre en el canvas."""
+        if not self.edit_mode or not self.drag_start or not self.pdf_editor.selected_element:
+            return
+        
+        canvas_x = self.canvas.canvasx(event.x) - 10
+        canvas_y = self.canvas.canvasy(event.y) - 10
+        
+        # Calcular desplazamiento
+        dx = canvas_x - self.drag_start[0]
+        dy = canvas_y - self.drag_start[1]
+        
+        # Mover el elemento seleccionado
+        if self.pdf_editor.move_selected_element(dx, dy):
+            self.drag_start = (canvas_x, canvas_y)
+            self._update_display()
+            self.update_status(f"Moviendo elemento: Δx={int(dx)}, Δy={int(dy)}")
+        self.dragging = True
+    
+    def on_canvas_release(self, event):
+        """Maneja la liberación del mouse."""
+        if self.dragging:
+            self.update_status("Elemento soltado")
+            self.dragging = False
+        self.drag_start = None
+    
+    def on_canvas_double_click(self, event):
+        """Maneja doble clic en el canvas para editar elementos."""
+        if not self.edit_mode or not self.pdf_editor.current_pdf:
+            return
+        
+        canvas_x = self.canvas.canvasx(event.x) - 10
+        canvas_y = self.canvas.canvasy(event.y) - 10
+        
+        # Seleccionar elemento en la posición
+        selected = self.pdf_editor.select_element_at_position(self.current_page, (canvas_x, canvas_y))
+        
+        if selected and selected.type == 'text':
+            # Mostrar diálogo para editar texto
+            new_text = show_text_input(
+                self.root,
+                "Editar Texto",
+                "Modifique el texto:",
+                selected.content
+            )
+            
+            if new_text and new_text != selected.content:
+                if self.pdf_editor.edit_selected_element({'content': new_text}):
+                    self._update_display()
+                    self.update_status(f"Texto editado: '{new_text[:30]}...'")
+                    messagebox.showinfo("Éxito", "Texto editado correctamente")
+                else:
+                    messagebox.showerror("Error", "No se pudo editar el texto")
+        else:
+            self.update_status(f"Doble clic en: ({int(canvas_x)}, {int(canvas_y)}) - No hay texto para editar")
+    
+    def on_canvas_key(self, event):
+        """Maneja teclas presionadas."""
+        if not self.edit_mode:
+            return
+        
+        if event.keysym == 'Delete' and self.pdf_editor.selected_element:
+            # Confirmar eliminación
+            element = self.pdf_editor.selected_element
+            element_desc = f"texto '{element.content[:30]}...'" if element.type == 'text' else "imagen"
+            
+            if messagebox.askyesno("Confirmar eliminación", f"¿Está seguro de que desea eliminar el {element_desc}?"):
+                if self.pdf_editor.delete_selected_element():
+                    self._update_display()
+                    self.update_status(f"Elemento eliminado: {element_desc}")
+                    messagebox.showinfo("Éxito", "Elemento eliminado correctamente")
+                else:
+                    messagebox.showerror("Error", "No se pudo eliminar el elemento")
+        elif event.keysym == 'Escape':
+            # Deseleccionar elemento
+            self.pdf_editor.clear_selection()
+            self._update_display()
+            self.update_status("Selección cancelada")
+    
+    def on_mouse_wheel(self, event):
+        """Maneja el scroll del mouse."""
+        # Scroll vertical
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
