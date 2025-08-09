@@ -56,10 +56,3 @@ App_EditarPdf/
 └── README.md
 ```
 
-## Paleta de Colores
-
-- Azul Principal: #2E86AB
-- Azul Secundario: #A23B72
-- Azul Claro: #F18F01
-- Azul Oscuro: #C73E1D
-- Fondo: #F5F9FC
