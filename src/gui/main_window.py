@@ -12,6 +12,7 @@ from typing import Optional
 
 from ..utils.colors import ColorPalette
 from ..pdf_editor.editor import PDFEditor
+from .components.dialogs import show_text_input, show_page_selection, show_about
 
 
 class MainWindow:
@@ -263,6 +264,23 @@ class MainWindow:
         )
         
         self.btn_merge.pack(fill='x', pady=2)
+        
+        # Sección de ayuda
+        help_frame = ttk.LabelFrame(
+            self.sidebar_frame,
+            text="Ayuda",
+            padding=10
+        )
+        help_frame.pack(fill='x', padx=15, pady=5)
+        
+        self.btn_about = ttk.Button(
+            help_frame,
+            text="ℹ️ Acerca de",
+            style='Secondary.TButton',
+            command=self.show_about
+        )
+        
+        self.btn_about.pack(fill='x', pady=2)
     
     def _create_viewer_area(self):
         """Crea el área central de visualización."""
@@ -562,29 +580,58 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
     
     def extract_pages(self):
         """Extrae páginas seleccionadas."""
-        # Implementación simplificada - extraer página actual
-        file_path = filedialog.asksaveasfilename(
-            title="Guardar páginas extraídas",
-            defaultextension=".pdf",
-            filetypes=[("Archivos PDF", "*.pdf")]
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        # Mostrar diálogo de selección de páginas
+        total_pages = self.pdf_editor.get_page_count()
+        selected_pages = show_page_selection(
+            self.root,
+            "Extraer Páginas",
+            total_pages
         )
         
-        if file_path:
-            if self.pdf_editor.extract_pages([self.current_page], file_path):
-                messagebox.showinfo("Éxito", "Página extraída correctamente")
-                self.update_status("Página extraída")
-            else:
-                messagebox.showerror("Error", "No se pudo extraer la página")
+        if selected_pages is not None:
+            # Ajustar página actual si se seleccionó "current"
+            if len(selected_pages) == 1 and selected_pages[0] == 0:
+                selected_pages = [self.current_page]
+            
+            file_path = filedialog.asksaveasfilename(
+                title="Guardar páginas extraídas",
+                defaultextension=".pdf",
+                filetypes=[("Archivos PDF", "*.pdf")]
+            )
+            
+            if file_path:
+                if self.pdf_editor.extract_pages(selected_pages, file_path):
+                    pages_text = ", ".join([str(p + 1) for p in selected_pages])
+                    messagebox.showinfo(
+                        "Éxito", 
+                        f"Páginas {pages_text} extraídas correctamente"
+                    )
+                    self.update_status(f"Páginas extraídas: {len(selected_pages)}")
+                else:
+                    messagebox.showerror("Error", "No se pudieron extraer las páginas")
     
     def add_text(self):
         """Añade texto a la página actual."""
-        # Diálogo simple para añadir texto
-        text = tk.simpledialog.askstring("Añadir Texto", "Ingrese el texto:")
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        # Mostrar diálogo personalizado para entrada de texto
+        text = show_text_input(
+            self.root,
+            "Añadir Texto",
+            "Ingrese el texto que desea añadir:",
+            ""
+        )
+        
         if text:
             # Añadir en el centro de la página
             if self.pdf_editor.add_text(self.current_page, text, (100, 100)):
                 self._update_display()
-                self.update_status("Texto añadido")
+                self.update_status(f"Texto añadido: '{text[:20]}...'")
+                messagebox.showinfo("Éxito", "Texto añadido correctamente")
             else:
                 messagebox.showerror("Error", "No se pudo añadir el texto")
     
@@ -608,6 +655,10 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
                     self.update_status("PDFs fusionados")
                 else:
                     messagebox.showerror("Error", "No se pudieron fusionar los PDFs")
+    
+    def show_about(self):
+        """Muestra el diálogo Acerca de."""
+        show_about(self.root)
     
     def on_canvas_click(self, event):
         """Maneja clics en el canvas."""
