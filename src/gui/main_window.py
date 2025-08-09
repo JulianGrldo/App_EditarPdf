@@ -30,6 +30,10 @@ class MainWindow:
         self.dragging = False
         self.drag_start = None
         self.canvas_elements = {}  # {element_id: canvas_item_id}
+        self.adding_text_mode = False
+        self.adding_image_mode = False
+        self.text_input_active = False
+        self.temp_text_widget = None
         
         self._setup_window()
         self._create_styles()
@@ -256,7 +260,7 @@ class MainWindow:
             text_frame,
             text="📝 Añadir Texto",
             style='Secondary.TButton',
-            command=self.add_text,
+            command=self.toggle_add_text_mode,
             state='disabled'
         )
         
@@ -264,7 +268,7 @@ class MainWindow:
             text_frame,
             text="🖼️ Añadir Imagen",
             style='Secondary.TButton',
-            command=self.add_image,
+            command=self.toggle_add_image_mode,
             state='disabled'
         )
         
@@ -819,6 +823,164 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
             self.btn_edit_mode.config(text="✏️ Modo Edición")
             self.update_status("Modo edición desactivado")
             self.canvas.config(cursor="")
+            self._deactivate_all_modes()
+    
+    def toggle_add_text_mode(self):
+        """Activa/desactiva el modo de añadir texto."""
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        self.adding_text_mode = not self.adding_text_mode
+        
+        if self.adding_text_mode:
+            self.adding_image_mode = False
+            self.btn_add_text.config(text="✅ Modo Texto", style='Accent.TButton')
+            self.btn_add_image.config(text="🖼️ Añadir Imagen", style='Secondary.TButton')
+            self.canvas.config(cursor="crosshair")
+            self.update_status("Modo añadir texto activado - Haga clic donde desee escribir")
+        else:
+            self.btn_add_text.config(text="📝 Añadir Texto", style='Secondary.TButton')
+            self.canvas.config(cursor="")
+            self.update_status("Modo añadir texto desactivado")
+    
+    def toggle_add_image_mode(self):
+        """Activa/desactiva el modo de añadir imagen."""
+        if not self.pdf_editor.current_pdf:
+            return
+        
+        self.adding_image_mode = not self.adding_image_mode
+        
+        if self.adding_image_mode:
+            self.adding_text_mode = False
+            self.btn_add_image.config(text="✅ Modo Imagen", style='Accent.TButton')
+            self.btn_add_text.config(text="📝 Añadir Texto", style='Secondary.TButton')
+            self.canvas.config(cursor="crosshair")
+            self.update_status("Modo añadir imagen activado - Haga clic donde desee colocar la imagen")
+        else:
+            self.btn_add_image.config(text="🖼️ Añadir Imagen", style='Secondary.TButton')
+            self.canvas.config(cursor="")
+            self.update_status("Modo añadir imagen desactivado")
+    
+    def _deactivate_all_modes(self):
+        """Desactiva todos los modos de adición."""
+        self.adding_text_mode = False
+        self.adding_image_mode = False
+        self.btn_add_text.config(text="📝 Añadir Texto", style='Secondary.TButton')
+        self.btn_add_image.config(text="🖼️ Añadir Imagen", style='Secondary.TButton')
+        if self.temp_text_widget:
+            self.temp_text_widget.destroy()
+            self.temp_text_widget = None
+        self.text_input_active = False
+    
+    def _create_text_input_at_position(self, x, y):
+        """Crea un campo de entrada de texto en la posición especificada."""
+        if self.text_input_active:
+            return
+        
+        self.text_input_active = True
+        
+        # Crear un Entry widget temporal en el canvas
+        self.temp_text_widget = tk.Entry(
+            self.canvas,
+            font=('Arial', 12),
+            bg='white',
+            fg='black',
+            relief='solid',
+            borderwidth=1
+        )
+        
+        # Posicionar el widget en el canvas
+        canvas_item = self.canvas.create_window(
+            x + 10, y + 10,
+            window=self.temp_text_widget,
+            anchor='nw'
+        )
+        
+        # Configurar eventos
+        self.temp_text_widget.bind('<Return>', lambda e: self._confirm_text_input(x, y))
+        self.temp_text_widget.bind('<Escape>', lambda e: self._cancel_text_input())
+        self.temp_text_widget.bind('<FocusOut>', lambda e: self._confirm_text_input(x, y))
+        
+        # Dar foco al widget
+        self.temp_text_widget.focus_set()
+        
+        self.update_status("Escriba el texto y presione Enter para confirmar, Escape para cancelar")
+    
+    def _confirm_text_input(self, x, y):
+        """Confirma la entrada de texto y la añade al PDF."""
+        if not self.temp_text_widget or not self.text_input_active:
+            return
+        
+        text = self.temp_text_widget.get().strip()
+        
+        if text:
+            try:
+                element = self.pdf_editor.add_text_element(
+                    self.current_page,
+                    text,
+                    (x, y),
+                    font_size=12,
+                    color="black"
+                )
+                
+                self.update_status(f"Texto añadido: '{text[:30]}...'")
+                
+                # Activar modo edición si no está activo
+                if not self.edit_mode:
+                    self.toggle_edit_mode()
+                
+            except Exception as e:
+                print(f"Error al añadir texto: {e}")
+                self.update_status("Error al añadir texto")
+        
+        self._cancel_text_input()
+        self._update_display()
+    
+    def _cancel_text_input(self):
+        """Cancela la entrada de texto."""
+        if self.temp_text_widget:
+            self.temp_text_widget.destroy()
+            self.temp_text_widget = None
+        
+        self.text_input_active = False
+        self.update_status("Entrada de texto cancelada")
+    
+    def _add_image_at_position(self, x, y):
+        """Añade una imagen en la posición especificada."""
+        # Seleccionar archivo de imagen
+        image_file = filedialog.askopenfilename(
+            title="Seleccionar imagen",
+            filetypes=[
+                ("Imágenes", "*.png *.jpg *.jpeg *.gif *.bmp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        
+        if image_file:
+            try:
+                element = self.pdf_editor.add_image_element(
+                    self.current_page,
+                    image_file,
+                    (x, y),
+                    (150, 150)  # Tamaño por defecto
+                )
+                
+                self.update_status(f"Imagen añadida: {os.path.basename(image_file)}")
+                
+                # Activar modo edición si no está activo
+                if not self.edit_mode:
+                    self.toggle_edit_mode()
+                
+                # Desactivar modo añadir imagen
+                self.toggle_add_image_mode()
+                
+            except Exception as e:
+                print(f"Error al añadir imagen: {e}")
+                self.update_status("Error al añadir imagen")
+            
+            self._update_display()
         
         self._update_display()
     
@@ -865,25 +1027,37 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
     
     def on_canvas_click(self, event):
         """Maneja clics en el canvas."""
-        if not self.edit_mode or not self.pdf_editor.current_pdf:
+        if not self.pdf_editor.current_pdf:
             return
         
         # Convertir coordenadas del canvas a coordenadas del PDF
         canvas_x = self.canvas.canvasx(event.x) - 10  # Ajustar por offset de imagen
         canvas_y = self.canvas.canvasy(event.y) - 10
         
-        # Intentar seleccionar elemento en la posición
-        selected = self.pdf_editor.select_element_at_position(self.current_page, (canvas_x, canvas_y))
+        # Modo añadir texto
+        if self.adding_text_mode:
+            self._create_text_input_at_position(canvas_x, canvas_y)
+            return
         
-        if selected:
-            self.update_status(f"Elemento seleccionado: {selected.type} - {selected.content[:30] if selected.type == 'text' else 'imagen'}")
-            self.drag_start = (canvas_x, canvas_y)
-        else:
-            self.pdf_editor.clear_selection()
-            self.update_status(f"Posición: ({int(canvas_x)}, {int(canvas_y)}) - Ningún elemento seleccionado")
-            self.drag_start = None
+        # Modo añadir imagen
+        if self.adding_image_mode:
+            self._add_image_at_position(canvas_x, canvas_y)
+            return
         
-        self._update_display()
+        # Modo edición normal
+        if self.edit_mode:
+            # Intentar seleccionar elemento en la posición
+            selected = self.pdf_editor.select_element_at_position(self.current_page, (canvas_x, canvas_y))
+            
+            if selected:
+                self.update_status(f"Elemento seleccionado: {selected.type} - {selected.content[:30] if selected.type == 'text' else 'imagen'}")
+                self.drag_start = (canvas_x, canvas_y)
+            else:
+                self.pdf_editor.clear_selection()
+                self.update_status(f"Posición: ({int(canvas_x)}, {int(canvas_y)}) - Ningún elemento seleccionado")
+                self.drag_start = None
+            
+            self._update_display()
     
     def on_canvas_drag(self, event):
         """Maneja el arrastre en el canvas."""
@@ -932,7 +1106,7 @@ Fecha modificación: {info.get('modification_date', 'N/A')}
             )
             
             if new_text and new_text != selected.content:
-                if self.pdf_editor.edit_selected_element({'content': new_text}):
+                if self.pdf_editor.edit_selected_element(new_text):
                     self._update_display()
                     self.update_status(f"Texto editado: '{new_text[:30]}...'")
                     messagebox.showinfo("Éxito", "Texto editado correctamente")

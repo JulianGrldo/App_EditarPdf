@@ -254,10 +254,11 @@ class PDFEditor:
         self.selected_element = None
         return None
     
-    def move_selected_element(self, new_position: Tuple[float, float]) -> bool:
-        """Mueve el elemento seleccionado a una nueva posición."""
+    def move_selected_element(self, dx: float, dy: float) -> bool:
+        """Mueve el elemento seleccionado por un desplazamiento relativo."""
         if self.selected_element:
-            self.selected_element.position = new_position
+            current_x, current_y = self.selected_element.position
+            self.selected_element.position = (current_x + dx, current_y + dy)
             return True
         return False
     
