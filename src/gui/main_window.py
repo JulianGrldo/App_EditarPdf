@@ -513,7 +513,8 @@ class MainWindow:
         controls = [
             self.btn_save, self.btn_save_as, self.btn_zoom_in, self.btn_zoom_out,
             self.btn_rotate_left, self.btn_rotate_right, self.btn_extract,
-            self.btn_add_text, self.btn_prev, self.btn_next
+            self.btn_add_text, self.btn_add_image, self.btn_edit_mode, 
+            self.btn_prev, self.btn_next
         ]
         
         for control in controls:
